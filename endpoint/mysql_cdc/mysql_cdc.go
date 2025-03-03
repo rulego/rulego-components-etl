@@ -33,6 +33,7 @@ import (
 	"github.com/rulego/rulego/utils/str"
 	"net/textproto"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -380,10 +381,13 @@ func (x *MySqlCDC) AddRouter(router endpointApi.Router, params ...interface{}) (
 	if router == nil {
 		return "", errors.New("router can not nil")
 	} else {
-		expr := router.GetFrom().ToString()
+		expr := strings.TrimSpace(router.GetFrom().ToString())
+		if expr == "" {
+			expr = MatchAll
+		}
 		//允许空expr，表示匹配所有
 		var regexpV *regexp.Regexp
-		if expr != "" && expr != MatchAll {
+		if expr != "" && expr != MatchAll && strings.HasPrefix(expr, "^") {
 			//编译表达式
 			if re, err := regexp.Compile(expr); err != nil {
 				return "", err
@@ -391,6 +395,7 @@ func (x *MySqlCDC) AddRouter(router endpointApi.Router, params ...interface{}) (
 				regexpV = re
 			}
 		}
+
 		x.CheckAndSetRouterId(router)
 		x.Lock()
 		defer x.Unlock()
@@ -403,6 +408,7 @@ func (x *MySqlCDC) AddRouter(router endpointApi.Router, params ...interface{}) (
 			x.routers[router.GetId()] = &RegexpRouter{
 				router: router,
 				regexp: regexpV,
+				path:   expr,
 			}
 			return router.GetId(), nil
 		}
@@ -430,6 +436,7 @@ type RegexpRouter struct {
 	router endpointApi.Router
 	//正则表达式
 	regexp *regexp.Regexp
+	path   string
 }
 type EventHandler struct {
 	canal.DummyEventHandler
@@ -459,8 +466,11 @@ func (h *EventHandler) OnRow(e *canal.RowsEvent) error {
 
 	// 匹配符合的路由，处理消息
 	for _, v := range h.endpoint.routers {
-		if v.regexp == nil || e.Table == nil || v.regexp.Match([]byte(e.Table.String())) {
-			h.endpoint.DoProcess(context.Background(), v.router, exchange)
+		if e.Table != nil {
+			tableNameStr := e.Table.String()
+			if v.path == MatchAll || v.path == tableNameStr || (v.regexp != nil && v.regexp.Match([]byte(tableNameStr))) {
+				h.endpoint.DoProcess(context.Background(), v.router, exchange)
+			}
 		}
 	}
 	return nil
