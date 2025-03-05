@@ -3,7 +3,7 @@ module github.com/rulego/rulego-components-etl
 go 1.22
 
 require (
-	github.com/go-mysql-org/go-mysql v1.10.0
+	github.com/go-mysql-org/go-mysql v1.11.0
 	github.com/rulego/rulego v0.27.0
 )
 
@@ -32,7 +32,6 @@ require (
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20241118164214-4f047be191be // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/shopspring/decimal v1.2.0 // indirect
-	github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726 // indirect
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07 // indirect
 	github.com/stretchr/testify v1.9.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
