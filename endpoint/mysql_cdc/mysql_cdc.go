@@ -49,7 +49,8 @@ const (
 	KeyPkColumnNames = "pkColumnNames"
 	KeyLogPos        = "logPos"
 	// MatchAll 匹配所有数据
-	MatchAll = "*"
+	MatchAll     = "*"
+	ActionUpdate = "update"
 )
 
 // Endpoint 别名
@@ -69,7 +70,7 @@ type RequestMessage struct {
 	Action string
 	// Header can be used to inspect the event
 	Header *replication.EventHeader
-	// 数据结构[][]interface{} ,如果是更新时间，格式： [更新前行数据, 更新后行数据]
+	// 数据结构[][]interface{} ,如果是更新动作，格式： [更新前行数据, 更新后行数据]
 	body []byte
 	msg  *types.RuleMsg
 	err  error
@@ -89,6 +90,7 @@ func (r *RequestMessage) ColumnNames() []string {
 	}
 	return nil
 }
+
 func (r *RequestMessage) PKColumns() []string {
 	if r.Table != nil {
 		var names []string
@@ -216,15 +218,15 @@ func (r *ResponseMessage) GetError() error {
 
 type Config struct {
 	// mysql服务器地址
-	Server string
+	Server string `json:"server"`
 	//用户名
-	User string
+	User string `json:"user"`
 	// 密码
-	Password string
+	Password string `json:"password"`
 	//FromOldest 是否从最旧binlog同步，否则从最新的binlog和位置同步
-	FromOldest bool
+	FromOldest bool `json:"fromOldest"`
 	// 数据库
-	Dbs []string
+	Dbs []string `json:"dbs"`
 	// IncludeTables or ExcludeTables should contain database name.
 	// IncludeTables defines the tables that will be included, if empty, all tables will be included.
 	// ExcludeTables defines the tables that will be excluded from the ones defined by IncludeTables.
@@ -232,20 +234,22 @@ type Config struct {
 	// eg, IncludeTables : [".*\\.canal","test.*"], ExcludeTables : ["mysql\\..*"]
 	//     this will include all database's 'canal' table, except database 'mysql'.
 	// Default IncludeTables and ExcludeTables are empty, this will include all tables
-	IncludeTables []string
-	ExcludeTables []string
+	IncludeTables []string `json:"includeTables"`
+	ExcludeTables []string `json:"excludeTables"`
 
 	// mysqldump execution path, like mysqldump or /usr/bin/mysqldump, etc...
 	// If not set, ignore using mysqldump.
-	ExecutionPath string
+	ExecutionPath string `json:"executionPath"`
 	//字符集
-	Charset string
+	Charset string `json:"charset"`
 	//mysql or mariadb
-	Flavor string
+	Flavor string `json:"flavor"`
 	//心跳单位秒
-	Heartbeat int
+	Heartbeat int `json:"heartbeat"`
 	// 读超时单位秒
-	ReadTimeout int
+	ReadTimeout int `json:"readTimeout"`
+	//限制条数，0：不限制，其他：如果超过该值，则忽略不处理。用于过滤批量操作的数据
+	Limit int `json:"limit"`
 }
 
 // MySqlCDC 接收端端点
@@ -285,6 +289,9 @@ func (x *MySqlCDC) New() types.Node {
 // Init 初始化
 func (x *MySqlCDC) Init(ruleConfig types.Config, configuration types.Configuration) error {
 	err := maps.Map2Struct(configuration, &x.Config)
+	if x.Config.Limit < 0 {
+		x.Config.Limit = 0
+	}
 	x.RuleConfig = ruleConfig
 	return err
 }
@@ -347,6 +354,7 @@ func (x *MySqlCDC) Start() error {
 	c.SetEventHandler(&EventHandler{
 		endpoint: x,
 		name:     config.Server + "-handler",
+		config:   x.Config,
 	})
 	if config.FromOldest {
 		go func() {
@@ -442,9 +450,19 @@ type EventHandler struct {
 	canal.DummyEventHandler
 	name     string
 	endpoint *MySqlCDC
+	config   Config
 }
 
 func (h *EventHandler) OnRow(e *canal.RowsEvent) error {
+	if h.config.Limit > 0 {
+		length := len(e.Rows)
+		if e.Action == ActionUpdate {
+			length = length / 2
+		}
+		if length > h.config.Limit {
+			return nil
+		}
+	}
 	b, err := json.Marshal(e.Rows)
 	if err != nil {
 		h.endpoint.Printf("OnRow json marshal error: %s", err.Error())
