@@ -4,7 +4,7 @@ go 1.22
 
 require (
 	github.com/go-mysql-org/go-mysql v1.11.0
-	github.com/rulego/rulego v0.27.0
+	github.com/rulego/rulego v0.31.2-0.20250602155557-dd600e38f329
 )
 
 require (
@@ -14,7 +14,7 @@ require (
 	github.com/dlclark/regexp2 v1.7.0 // indirect
 	github.com/dop251/goja v0.0.0-20231024180952-594410467bc6 // indirect
 	github.com/eclipse/paho.mqtt.golang v1.4.3 // indirect
-	github.com/expr-lang/expr v1.16.9 // indirect
+	github.com/expr-lang/expr v1.17.2 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
