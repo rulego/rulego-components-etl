@@ -218,15 +218,15 @@ func (r *ResponseMessage) GetError() error {
 
 type Config struct {
 	// mysql服务器地址
-	Server string `json:"server"`
+	Server string `json:"server" label:"Server" desc:"MySQL server address, format: host:port" required:"true"`
 	//用户名
-	User string `json:"user"`
+	User string `json:"user" label:"Username" desc:"MySQL authentication username"`
 	// 密码
-	Password string `json:"password"`
+	Password string `json:"password" label:"Password" desc:"MySQL authentication password"`
 	//FromOldest 是否从最旧binlog同步，否则从最新的binlog和位置同步
-	FromOldest bool `json:"fromOldest"`
+	FromOldest bool `json:"fromOldest" label:"From Oldest" desc:"Sync from oldest binlog, otherwise sync from latest position"`
 	// 数据库
-	Dbs []string `json:"dbs"`
+	Dbs []string `json:"dbs" label:"Databases" desc:"Database names to watch, empty means all databases"`
 	// IncludeTables or ExcludeTables should contain database name.
 	// IncludeTables defines the tables that will be included, if empty, all tables will be included.
 	// ExcludeTables defines the tables that will be excluded from the ones defined by IncludeTables.
@@ -234,22 +234,22 @@ type Config struct {
 	// eg, IncludeTables : [".*\\.canal","test.*"], ExcludeTables : ["mysql\\..*"]
 	//     this will include all database's 'canal' table, except database 'mysql'.
 	// Default IncludeTables and ExcludeTables are empty, this will include all tables
-	IncludeTables []string `json:"includeTables"`
-	ExcludeTables []string `json:"excludeTables"`
+	IncludeTables []string `json:"includeTables" label:"Include Tables" desc:"Table regex patterns to include, e.g. mydb\\.users, test.*"`
+	ExcludeTables []string `json:"excludeTables" label:"Exclude Tables" desc:"Table regex patterns to exclude, e.g. mysql\\..*"`
 
 	// mysqldump execution path, like mysqldump or /usr/bin/mysqldump, etc...
 	// If not set, ignore using mysqldump.
-	ExecutionPath string `json:"executionPath"`
+	ExecutionPath string `json:"executionPath" label:"Execution Path" desc:"mysqldump execution path, e.g. mysqldump or /usr/bin/mysqldump"`
 	//字符集
-	Charset string `json:"charset"`
+	Charset string `json:"charset" label:"Charset" desc:"Connection charset, default utf8"`
 	//mysql or mariadb
-	Flavor string `json:"flavor"`
+	Flavor string `json:"flavor" label:"Flavor" desc:"Database flavor: mysql or mariadb"`
 	//心跳单位秒
-	Heartbeat int `json:"heartbeat"`
+	Heartbeat int `json:"heartbeat" label:"Heartbeat" desc:"Heartbeat interval in seconds"`
 	// 读超时单位秒
-	ReadTimeout int `json:"readTimeout"`
+	ReadTimeout int `json:"readTimeout" label:"Read Timeout" desc:"Read timeout in seconds"`
 	//限制条数，0：不限制，其他：如果超过该值，则忽略不处理。用于过滤批量操作的数据
-	Limit int `json:"limit"`
+	Limit int `json:"limit" label:"Limit" desc:"Max rows per event, 0 means no limit"`
 }
 
 // MySqlCDC 接收端端点
@@ -299,6 +299,33 @@ func (x *MySqlCDC) Init(ruleConfig types.Config, configuration types.Configurati
 // Destroy 销毁
 func (x *MySqlCDC) Destroy() {
 	_ = x.Close()
+}
+
+// Desc returns the component description
+func (x *MySqlCDC) Desc() string {
+	return "MySQL CDC endpoint for capturing database changes via binlog replication"
+}
+
+// Category returns the component category
+func (x *MySqlCDC) Category() string {
+	return "endpoint"
+}
+
+func (x *MySqlCDC) Def() types.ComponentForm {
+	return types.ComponentForm{
+		Desc: "MySQL CDC endpoint for capturing database row-level changes via binlog replication",
+		RouterForm: &types.RouterForm{
+			From: &types.RouterFormField{
+				Path: types.ComponentFormField{
+					Name:     "path",
+					Type:     "string",
+					Label:    "Table Pattern",
+					Desc:     "MySQL table identifier to watch, e.g. mydb.users or regex pattern ^mydb\\..*, use * for all tables",
+					Required: true,
+				},
+			},
+		},
+	}
 }
 
 func (x *MySqlCDC) Close() error {
