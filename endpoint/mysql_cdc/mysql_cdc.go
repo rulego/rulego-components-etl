@@ -37,7 +37,7 @@ import (
 	"time"
 )
 
-// Type 组件类型
+// Type returns the component type
 const Type = types.EndpointTypePrefix + "mysql_cdc"
 
 const (
@@ -48,29 +48,29 @@ const (
 	KeyColumnNames   = "columnNames"
 	KeyPkColumnNames = "pkColumnNames"
 	KeyLogPos        = "logPos"
-	// MatchAll 匹配所有数据
+	// MatchAll matches all data
 	MatchAll     = "*"
 	ActionUpdate = "update"
 )
 
-// Endpoint 别名
+// Endpoint alias
 type Endpoint = MySqlCDC
 
 var _ endpointApi.Endpoint = (*Endpoint)(nil)
 
-// 注册组件
+// Register the component
 func init() {
 	_ = endpoint.Registry.Register(&Endpoint{})
 }
 
-// RequestMessage 请求消息
+// RequestMessage
 type RequestMessage struct {
 	Table *schema.Table
 	//insert/update/delete
 	Action string
 	// Header can be used to inspect the event
 	Header *replication.EventHeader
-	// 数据结构[][]interface{} ,如果是更新动作，格式： [更新前行数据, 更新后行数据]
+	// Data structure[][]interface{}, if updating the action, format: [Update previous data, update subsequent data]
 	body []byte
 	msg  *types.RuleMsg
 	err  error
@@ -131,7 +131,7 @@ func (r *RequestMessage) SetMsg(msg *types.RuleMsg) {
 
 func (r *RequestMessage) GetMsg() *types.RuleMsg {
 	if r.msg == nil {
-		//默认指定是JSON格式，如果不是该类型，请在process函数中修改
+		//The default specification is JSON format. If it is not this type, please modify it in the process function
 		ruleMsg := types.NewMsg(0, r.From(), types.JSON, types.NewMetadata(), string(r.Body()))
 		ruleMsg.Metadata.PutValue(KeyAction, r.Action)
 		if r.Table != nil {
@@ -164,7 +164,7 @@ func (r *RequestMessage) GetError() error {
 	return r.err
 }
 
-// ResponseMessage http响应消息
+// ResponseMessage http Response message
 type ResponseMessage struct {
 	Table   *schema.Table
 	Action  string
@@ -217,15 +217,15 @@ func (r *ResponseMessage) GetError() error {
 }
 
 type Config struct {
-	// mysql服务器地址
+	// MySQL server address
 	Server string `json:"server" label:"Server" desc:"MySQL server address, format: host:port" required:"true"`
-	//用户名
+	//Username
 	User string `json:"user" label:"Username" desc:"MySQL authentication username"`
-	// 密码
+	// Password
 	Password string `json:"password" label:"Password" desc:"MySQL authentication password"`
-	//FromOldest 是否从最旧binlog同步，否则从最新的binlog和位置同步
+	//Does FromOldest synchronize from the oldest binlog, or if not, synchronize from the latest binlog and location?
 	FromOldest bool `json:"fromOldest" label:"From Oldest" desc:"Sync from oldest binlog, otherwise sync from latest position"`
-	// 数据库
+	// Database
 	Dbs []string `json:"dbs" label:"Databases" desc:"Database names to watch, empty means all databases"`
 	// IncludeTables or ExcludeTables should contain database name.
 	// IncludeTables defines the tables that will be included, if empty, all tables will be included.
@@ -240,30 +240,30 @@ type Config struct {
 	// mysqldump execution path, like mysqldump or /usr/bin/mysqldump, etc...
 	// If not set, ignore using mysqldump.
 	ExecutionPath string `json:"executionPath" label:"Execution Path" desc:"mysqldump execution path, e.g. mysqldump or /usr/bin/mysqldump"`
-	//字符集
+	//Character set
 	Charset string `json:"charset" label:"Charset" desc:"Connection charset, default utf8"`
 	//mysql or mariadb
 	Flavor string `json:"flavor" label:"Flavor" desc:"Database flavor: mysql or mariadb"`
-	//心跳单位秒
+	//Heartbeat is measured in seconds
 	Heartbeat int `json:"heartbeat" label:"Heartbeat" desc:"Heartbeat interval in seconds"`
-	// 读超时单位秒
+	// Read timeout units in seconds
 	ReadTimeout int `json:"readTimeout" label:"Read Timeout" desc:"Read timeout in seconds"`
-	//限制条数，0：不限制，其他：如果超过该值，则忽略不处理。用于过滤批量操作的数据
+	//Limit the number of entries: 0: No limit, Other: If the value exceeds this value, ignore and do not process. Used to filter data for batch operations
 	Limit int `json:"limit" label:"Limit" desc:"Max rows per event, 0 means no limit"`
 }
 
-// MySqlCDC 接收端端点
+// MySqlCDC receiving endpoint
 type MySqlCDC struct {
 	impl.BaseEndpoint
 	RuleConfig types.Config
-	//Config 配置
+	//Config configuration
 	Config Config
-	// 路由映射表
+	// Route mapping table
 	routers map[string]*RegexpRouter
 	canal   *canal.Canal
 }
 
-// Type 组件类型
+// Type returns the component type
 func (x *MySqlCDC) Type() string {
 	return Type
 }
@@ -286,7 +286,7 @@ func (x *MySqlCDC) New() types.Node {
 	}
 }
 
-// Init 初始化
+// Init initializes the component
 func (x *MySqlCDC) Init(ruleConfig types.Config, configuration types.Configuration) error {
 	err := maps.Map2Struct(configuration, &x.Config)
 	if x.Config.Limit < 0 {
@@ -296,7 +296,7 @@ func (x *MySqlCDC) Init(ruleConfig types.Config, configuration types.Configurati
 	return err
 }
 
-// Destroy 销毁
+// Destroy releases resources
 func (x *MySqlCDC) Destroy() {
 	_ = x.Close()
 }
@@ -420,10 +420,10 @@ func (x *MySqlCDC) AddRouter(router endpointApi.Router, params ...interface{}) (
 		if expr == "" {
 			expr = MatchAll
 		}
-		//允许空expr，表示匹配所有
+		//Allow empty expr, indicating matching all items
 		var regexpV *regexp.Regexp
 		if expr != "" && expr != MatchAll && strings.HasPrefix(expr, "^") {
-			//编译表达式
+			//Compiling expressions
 			if re, err := regexp.Compile(expr); err != nil {
 				return "", err
 			} else {
@@ -463,13 +463,13 @@ func (x *MySqlCDC) RemoveRouter(routerId string, params ...interface{}) error {
 	return nil
 }
 
-// RegexpRouter 正则表达式路由
+// RegexpRouter is a regular expression for routing
 type RegexpRouter struct {
-	//路由ID
+	//Route ID
 	id string
-	//路由
+	//Route
 	router endpointApi.Router
-	//正则表达式
+	//Regular expression
 	regexp *regexp.Regexp
 	path   string
 }
@@ -496,7 +496,7 @@ func (h *EventHandler) OnRow(e *canal.RowsEvent) error {
 		return nil
 	}
 	//h.endpoint.Printf("OnRow action:%s, table:%s,rows: %s", e.Table.String(), e.Action, string(b))
-	// 创建一个交换对象，用于存储输入和输出的消息
+	// Create an exchange object to store input and output messages
 	exchange := &endpoint.Exchange{
 		In: &RequestMessage{
 			Table:  e.Table,
@@ -509,7 +509,7 @@ func (h *EventHandler) OnRow(e *canal.RowsEvent) error {
 			Action: e.Action,
 		}}
 
-	// 匹配符合的路由，处理消息
+	// Matching the matching routes and processing messages
 	for _, v := range h.endpoint.routers {
 		if e.Table != nil {
 			tableNameStr := e.Table.String()
