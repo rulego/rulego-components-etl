@@ -21,20 +21,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/textproto"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/rulego/rulego/api/types"
 	endpointApi "github.com/rulego/rulego/api/types/endpoint"
+	"github.com/rulego/rulego/components/base"
 	"github.com/rulego/rulego/endpoint"
 	"github.com/rulego/rulego/endpoint/impl"
 	"github.com/rulego/rulego/utils/maps"
 	"github.com/rulego/rulego/utils/str"
-	"net/textproto"
-	"regexp"
-	"strings"
-	"time"
 )
 
 // Type 组件类型
@@ -261,6 +264,17 @@ type MySqlCDC struct {
 	// 路由映射表
 	routers map[string]*RegexpRouter
 	canal   *canal.Canal
+	// canalMu 保护 canal 生命周期：晋升回调、Demote 回调与 Close 来自不同协程
+	canalMu sync.Mutex
+	// chainId 所属规则链 ID，取自 Init 注入的链定义，参与选主锁键
+	chainId string
+	// instanceKey 实例标识：配置内容的散列，多副本部署同名端点生成相同键
+	instanceKey string
+	// guard 多副本选主：leader 运行 binlog 读取，待命副本不启动；
+	// 两副本同时读同一 binlog 会全量重复触发规则链
+	guard *types.ActiveGuard
+	// guardCancel 停掉选主循环
+	guardCancel context.CancelFunc
 }
 
 // Type 组件类型
@@ -293,6 +307,18 @@ func (x *MySqlCDC) Init(ruleConfig types.Config, configuration types.Configurati
 		x.Config.Limit = 0
 	}
 	x.RuleConfig = ruleConfig
+
+	if def := x.GetRuleChainDefinition(configuration); def != nil {
+		x.chainId = def.RuleChain.ID
+	}
+	// 实例标识优先取端点节点 Id（链内唯一、跨副本一致），无 Id 时回退配置散列，
+	// 避免同链内同配置的多端点节点锁键互撞
+	x.instanceKey = base.NodeIdOf(configuration)
+	if x.instanceKey == "" {
+		x.instanceKey = base.ConfigKey(x.Config)
+	}
+	x.guard = types.NewActiveGuard(ruleConfig,
+		types.OnceScope(Type, ruleConfig.Owner, x.chainId, x.instanceKey))
 	return err
 }
 
@@ -329,12 +355,76 @@ func (x *MySqlCDC) Def() types.ComponentForm {
 }
 
 func (x *MySqlCDC) Close() error {
-	x.BaseEndpoint.Destroy()
-	if x.canal != nil {
-		x.canal.Close()
+	if x.guardCancel != nil {
+		x.guardCancel()
 	}
+	x.stopCanal()
+	x.BaseEndpoint.Destroy()
 	return nil
 }
+
+// startCanal 创建 binlog 同步器并运行。单实例由 Start 同步调用；
+// 多副本由守卫在晋升时调用，返回错误则释放租约待下轮重试（如 MySQL 暂不可达）。
+func (x *MySqlCDC) startCanal() error {
+	config := x.Config
+	cfg := x.GetDefaultConfig(x.Config)
+
+	c, err := canal.NewCanal(cfg)
+	if err != nil {
+		return err
+	}
+	x.canalMu.Lock()
+	x.canal = c
+	x.canalMu.Unlock()
+
+	// Register a handler to handle RowsEvent
+	c.SetEventHandler(&EventHandler{
+		endpoint: x,
+		name:     config.Server + "-handler",
+		config:   x.Config,
+	})
+	if config.FromOldest {
+		go func() {
+			err2 := c.Run()
+			if err2 != nil {
+				x.Printf("Run canal error: %s", err2.Error())
+			}
+			// 读取器退出即让出租约：否则 leader 死读期间租约照常续约，
+			// 待命副本永远无法接管
+			x.guard.Demote(x.stopCanal)
+		}()
+	} else {
+		post, err := c.GetMasterPos()
+		if err != nil {
+			x.canalMu.Lock()
+			c.Close()
+			x.canal = nil
+			x.canalMu.Unlock()
+			return err
+		}
+		go func() {
+			err2 := c.RunFrom(post)
+			if err2 != nil {
+				x.Printf("RunFrom canal error: %s", err2.Error())
+			}
+			x.guard.Demote(x.stopCanal)
+		}()
+	}
+
+	return nil
+}
+
+// stopCanal 停止 binlog 读取。降级与停机共用；重启读取的位置与进程重启
+// 一致（FromOldest 或当前最新位点），切换期间的事件不回放。
+func (x *MySqlCDC) stopCanal() {
+	x.canalMu.Lock()
+	defer x.canalMu.Unlock()
+	if x.canal != nil {
+		x.canal.Close()
+		x.canal = nil
+	}
+}
+
 func (x *MySqlCDC) GetDefaultConfig(newConfig Config) *canal.Config {
 	c := canal.NewDefaultConfig()
 	if newConfig.Server != "" {
@@ -367,42 +457,16 @@ func (x *MySqlCDC) GetDefaultConfig(newConfig Config) *canal.Config {
 	}
 	return c
 }
+
 func (x *MySqlCDC) Start() error {
-	config := x.Config
-	cfg := x.GetDefaultConfig(x.Config)
-
-	c, err := canal.NewCanal(cfg)
-	if err != nil {
-		return err
+	// 单实例：同步启动，保持启动失败即报错的既有语义
+	if x.RuleConfig.Locker == nil {
+		return x.startCanal()
 	}
-	x.canal = c
-
-	// Register a handler to handle RowsEvent
-	c.SetEventHandler(&EventHandler{
-		endpoint: x,
-		name:     config.Server + "-handler",
-		config:   x.Config,
-	})
-	if config.FromOldest {
-		go func() {
-			err2 := c.Run()
-			if err2 != nil {
-				x.Printf("Run canal error: %s", err2.Error())
-			}
-		}()
-	} else {
-		post, err := c.GetMasterPos()
-		if err != nil {
-			return err
-		}
-		go func() {
-			err2 := c.RunFrom(post)
-			if err2 != nil {
-				x.Printf("RunFrom canal error: %s", err2.Error())
-			}
-		}()
-	}
-
+	// 多副本：选主，leader 运行 binlog 读取，待命副本不启动
+	ctx, cancel := context.WithCancel(context.Background())
+	x.guardCancel = cancel
+	go x.guard.Run(ctx, x.startCanal, x.stopCanal)
 	return nil
 }
 
