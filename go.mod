@@ -4,7 +4,7 @@ go 1.22
 
 require (
 	github.com/go-mysql-org/go-mysql v1.11.0
-	github.com/rulego/rulego v0.37.3-0.20260907064819-972e69b12d64
+	github.com/rulego/rulego v1.0.0
 )
 
 require (
